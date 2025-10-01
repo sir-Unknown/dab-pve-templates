@@ -1,4 +1,5 @@
-# Build Ubuntu 24.04 (noble) template (requires dab >= 3.7.0)
+
+
 BASEDIR:=$(shell dab basedir)
 
 all: info/init_ok
