@@ -1,36 +1,79 @@
-# in order to build debian 13 version template - you need to have dab 3.7.0 installed on your build host
-
+# Build Debian 13 template (requires dab >= 3.7.0)
 BASEDIR:=$(shell dab basedir)
 
 all: info/init_ok
+	# 1) Bootstrap
 	dab bootstrap --minimal
-	# disable install recommends for apt
-	echo "APT::Install-Recommends \"false\";" > ${BASEDIR}/etc/apt/apt.conf.d/00InstallRecommends
-	# configure locale
-	echo "en_US.UTF-8" >${BASEDIR}/etc/locale
-	echo "en_US.UTF-8 UTF-8" > ${BASEDIR}/etc/locale.gen
-	dab install locales
-	dab exec dpkg-reconfigure -f noninteractive locales
-	# configure timezone
-	echo "Etc/UTC" > ${BASEDIR}/etc/timezone
-	dab exec cp --remove-destination -- /usr/share/zoneinfo/Etc/UTC /etc/localtime
-	dab exec dpkg-reconfigure -f noninteractive tzdata
-	# base software
-	dab exec dpkg --purge postfix
-	dab install dbus bzip2 dialog wget traceroute logrotate net-tools vim-nox python3
-	# enable root login over ssh and disable DNS for SSHD
-	sed -i "s/#PermitRootLogin prohibit-password/PermitRootLogin yes/" ${BASEDIR}/etc/ssh/sshd_config
-	sed -i 's/#UseDNS no/UseDNS no/g' ${BASEDIR}/etc/ssh/sshd_config
-	# add rc-local service
-	cp rc-local.service ${BASEDIR}/etc/systemd/system/rc-local.service
-	install -m 0755 rc.local ${BASEDIR}/etc/rc.local
-	dab exec systemctl enable rc-local
-	# mask not needed services
-#	dab exec systemctl mask sys-kernel-config.mount # no longer needed, mask added to dab 3.7.0
-#	dab exec systemctl mask systemd-journald-audit.socket # no longer needed, mask added to dab 3.7.0
+
+	# 2) APT/DPKG minimaliseren
+	echo 'APT::Install-Recommends "false";' > ${BASEDIR}/etc/apt/apt.conf.d/00norecommends
+	echo 'Acquire::Languages "none";' > ${BASEDIR}/etc/apt/apt.conf.d/01nolang
+	mkdir -p ${BASEDIR}/etc/dpkg/dpkg.cfg.d
+	echo 'path-exclude=/usr/share/man/*'           >  ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
+	echo 'path-exclude=/usr/share/doc/*'           >> ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
+	echo 'path-include=/usr/share/doc/*/copyright' >> ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
+
+	# 3) Journald klein/volatile
+	mkdir -p ${BASEDIR}/etc/systemd/journald.conf.d
+	echo -e "[Journal]\nStorage=volatile\nRuntimeMaxUse=64M" > ${BASEDIR}/etc/systemd/journald.conf.d/10-volatile.conf
+	echo -e "[RateLimit]\nInterval=30s\nBurst=200" > ${BASEDIR}/etc/systemd/journald.conf.d/20-ratelimit.conf
+
+	# 4) Locale & timezone (UTC)
+	echo -e "LANG=C.UTF-8\nLC_ALL=C.UTF-8" > ${BASEDIR}/etc/default/locale
+	echo "UTC" > ${BASEDIR}/etc/timezone
+	dab exec ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
+	dab exec systemctl mask systemd-timesyncd.service systemd-timesyncd.socket
+
+	# 5) Basissoftware
+	dab exec dpkg --purge postfix man-db cron
+	dab install curl wget logrotate ca-certificates openssh-server unattended-upgrades
+
+	# 6) SSH hardening (root key-only)
+	sed -ri 's/^[# ]*PermitRootLogin.*/PermitRootLogin prohibit-password/' ${BASEDIR}/etc/ssh/sshd_config || true
+	grep -q '^PermitRootLogin ' ${BASEDIR}/etc/ssh/sshd_config || echo 'PermitRootLogin prohibit-password' >> ${BASEDIR}/etc/ssh/sshd_config
+	sed -ri 's/^[# ]*PasswordAuthentication.*/PasswordAuthentication no/' ${BASEDIR}/etc/ssh/sshd_config || true
+	sed -ri 's/^[# ]*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' ${BASEDIR}/etc/ssh/sshd_config || true
+	sed -ri 's/^[# ]*UseDNS.*/UseDNS no/' ${BASEDIR}/etc/ssh/sshd_config || true
+
+	# 7) Unattended-upgrades config
+	cat > ${BASEDIR}/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+
+	cat > ${BASEDIR}/etc/apt/apt.conf.d/50unattended-upgrades <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename},label=Debian";
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+        "origin=Debian,codename=${distro_codename}-updates,label=Debian";
+};
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";   // in LXC meestal geen reboot
+Unattended-Upgrade::OnlyOnACPower "false";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::Verbose "false";
+EOF
+
+	dab exec systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
+
+	# 8) Services tunen
+	dab exec systemctl enable --now logrotate.timer
 	dab exec systemctl mask systemd-networkd-wait-online.service
-#	dab finalize
-	# NOTE: zstd appliances are only supported on PVE >= 7.0, take care on upload!
+	dab exec systemctl disable --now motd-news.service motd-news.timer 2>/dev/null || true
+
+	# 9) Unieke IDs/keys hergenereren bij first boot
+	dab exec rm -f /etc/ssh/ssh_host_*
+	dab exec sh -lc ':> /etc/machine-id; rm -f /var/lib/dbus/machine-id'
+
+	# 10) Cleanup vóór finalize
+	dab exec apt-get -y autoremove --purge
+	dab exec apt-get clean
+	dab exec rm -rf /var/lib/apt/lists/*
+	dab exec rm -rf /usr/share/locale/* /usr/share/doc/* /usr/share/man/* || true
+
+	# 11) Finalize (zstd alleen PVE >= 7.0)
 	dab finalize --compressor zstd-max
 
 info/init_ok: dab.conf
