@@ -47,8 +47,8 @@ all: info/init_ok
 	  2>/dev/null || true
 
 	# 6) Install only the needed packages (minimal but functional)
-	dab exec apt-get update
-	dab exec apt-get install -y --no-install-recommends \
+	#dab exec apt-get update
+	dab exec apt-get install -y \
 	  curl wget logrotate ca-certificates openssh-server
 
 	# 7) SSH hardening (root key-only login, no password auth, stricter limits)
