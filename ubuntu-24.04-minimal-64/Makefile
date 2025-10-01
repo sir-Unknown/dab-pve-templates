@@ -32,7 +32,7 @@ all: info/init_ok
 	dab exec dpkg --purge ubuntu-advantage-tools cloud-init 2>/dev/null || true
 	dab exec systemctl disable --now snapd.seeded.service snapd.socket snapd.service 2>/dev/null || true
 	dab exec dpkg --purge snapd 2>/dev/null || true
-	dab exec dpkg --purge network-manager whoopsie apport 2>/dev/null || true
+	dab exec dpkg --purge network-manager whoopsie apport python3-apport ubuntu-pro-client ubuntu-pro-client-l10n 2>/dev/null || true
 
 	# 6) SSH hardening (root key-only)
 	sed -ri 's/^[# ]*PermitRootLogin.*/PermitRootLogin prohibit-password/' ${BASEDIR}/etc/ssh/sshd_config || true
