@@ -1,5 +1,6 @@
 # Build Ubuntu 24.04 (noble) template (requires dab >= 3.7.0)
 BASEDIR:=$(shell dab basedir)
+export DAB_DEBUG=1
 
 all: info/init_ok
 	# 1) Bootstrap minimal base system
