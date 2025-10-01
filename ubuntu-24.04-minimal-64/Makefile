@@ -5,9 +5,11 @@ all: info/init_ok
 	# 1) Bootstrap
 	dab bootstrap --minimal
 
-	# 2) APT/DPKG minimaliseren
+	# 2) APT/DPKG minimaliseren & stiller
 	echo 'APT::Install-Recommends "false";' > ${BASEDIR}/etc/apt/apt.conf.d/00norecommends
-	echo 'Acquire::Languages "none";' > ${BASEDIR}/etc/apt/apt.conf.d/01nolang
+	echo 'Acquire::Languages "none";'      > ${BASEDIR}/etc/apt/apt.conf.d/01nolang
+	echo 'Dpkg::Use-Pty "false";'          > ${BASEDIR}/etc/apt/apt.conf.d/99nopy
+	echo 'Acquire::Retries "3";'           > ${BASEDIR}/etc/apt/apt.conf.d/80retries
 	mkdir -p ${BASEDIR}/etc/dpkg/dpkg.cfg.d
 	echo 'path-exclude=/usr/share/man/*'           >  ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
 	echo 'path-exclude=/usr/share/doc/*'           >> ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
@@ -24,12 +26,13 @@ all: info/init_ok
 	dab exec ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 	dab exec systemctl mask systemd-timesyncd.service systemd-timesyncd.socket
 
-	# 5) Basissoftware
+	# 5) Basissoftware (+ purges die in LXC weinig nut hebben)
 	dab exec dpkg --purge postfix man-db cron 2>/dev/null || true
 	dab install curl wget logrotate ca-certificates openssh-server unattended-upgrades
-
-	# (optioneel) geen ESM/UA-nags in containers
-	dab exec dpkg --purge ubuntu-advantage-tools 2>/dev/null || true
+	dab exec dpkg --purge ubuntu-advantage-tools cloud-init 2>/dev/null || true
+	dab exec systemctl disable --now snapd.seeded.service snapd.socket snapd.service 2>/dev/null || true
+	dab exec dpkg --purge snapd 2>/dev/null || true
+	dab exec dpkg --purge network-manager whoopsie apport 2>/dev/null || true
 
 	# 6) SSH hardening (root key-only)
 	sed -ri 's/^[# ]*PermitRootLogin.*/PermitRootLogin prohibit-password/' ${BASEDIR}/etc/ssh/sshd_config || true
@@ -37,8 +40,10 @@ all: info/init_ok
 	sed -ri 's/^[# ]*PasswordAuthentication.*/PasswordAuthentication no/' ${BASEDIR}/etc/ssh/sshd_config || true
 	sed -ri 's/^[# ]*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' ${BASEDIR}/etc/ssh/sshd_config || true
 	sed -ri 's/^[# ]*UseDNS.*/UseDNS no/' ${BASEDIR}/etc/ssh/sshd_config || true
+	sed -ri 's/^[# ]*X11Forwarding.*/X11Forwarding no/' ${BASEDIR}/etc/ssh/sshd_config || true
+	sed -ri 's/^[# ]*MaxAuthTries.*/MaxAuthTries 20/' ${BASEDIR}/etc/ssh/sshd_config || true
 
-	# 7) Unattended-upgrades config (Ubuntu noble)
+	# 7) Unattended-upgrades (security-only)
 	cat > ${BASEDIR}/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Download-Upgradeable-Packages "1";
@@ -46,10 +51,8 @@ APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
 EOF
 
-	# Origins: Ubuntu + security pocket
 	cat > ${BASEDIR}/etc/apt/apt.conf.d/50unattended-upgrades <<'EOF'
 Unattended-Upgrade::Origins-Pattern {
-        "origin=Ubuntu,codename=${distro_codename},label=Ubuntu";
         "origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu";
 };
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
@@ -58,13 +61,16 @@ Unattended-Upgrade::OnlyOnACPower "false";
 Unattended-Upgrade::MinimalSteps "true";
 Unattended-Upgrade::Verbose "false";
 EOF
-
 	dab exec systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
 
 	# 8) Services tunen
 	dab exec systemctl enable --now logrotate.timer
 	dab exec systemctl mask systemd-networkd-wait-online.service
 	dab exec systemctl disable --now motd-news.service motd-news.timer 2>/dev/null || true
+	# resolved is vaak overbodig in LXC (host levert resolv.conf)
+	dab exec systemctl mask systemd-resolved.service 2>/dev/null || true
+	# e2fs scrub heeft geen nut in LXC
+	dab exec systemctl disable --now e2scrub_all.timer e2scrub_reap.service 2>/dev/null || true
 
 	# 9) Unieke IDs/keys hergenereren bij first boot
 	dab exec rm -f /etc/ssh/ssh_host_*
@@ -73,7 +79,7 @@ EOF
 	# 10) Cleanup vóór finalize
 	dab exec apt-get -y autoremove --purge
 	dab exec apt-get clean
-	dab exec rm -rf /var/lib/apt/lists/*
+	dab exec rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*-old
 	dab exec rm -rf /usr/share/locale/* /usr/share/doc/* /usr/share/man/* || true
 
 	# 11) Finalize
