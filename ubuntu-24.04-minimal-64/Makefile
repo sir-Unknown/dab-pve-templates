@@ -1,32 +1,82 @@
-
-
+# Build Ubuntu 24.04 (noble) template (requires dab >= 3.7.0)
 BASEDIR:=$(shell dab basedir)
 
 all: info/init_ok
-    # dab 3.5.2 required to build this template
+	# 1) Bootstrap
 	dab bootstrap --minimal
-	echo "APT::Install-Recommends \"false\";" > ${BASEDIR}/etc/apt/apt.conf.d/00InstallRecommends
-	echo "en_US.UTF-8" >${BASEDIR}/etc/locale
-	echo "en_US.UTF-8 UTF-8" > ${BASEDIR}/etc/locale.gen
-	dab install locales
-	dab exec dpkg-reconfigure -f noninteractive locales
-	echo "Etc/UTC" > ${BASEDIR}/etc/timezone
-	dab exec cp --remove-destination --  /usr/share/zoneinfo/Etc/UTC /etc/localtime
-	dab exec dpkg-reconfigure -f noninteractive tzdata
 
-	dab exec dpkg --purge postfix
-	dab install bzip2 dialog wget traceroute logrotate net-tools vim-nox python3
-	# enable root over ssh
-	sed -i "s/#PermitRootLogin prohibit-password/PermitRootLogin yes/" ${BASEDIR}/etc/ssh/sshd_config
-	cp rc-local.service ${BASEDIR}/etc/systemd/system/rc-local.service
-	install -m 0755 rc.local ${BASEDIR}/etc/rc.local
-	dab exec systemctl enable rc-local
-#	# mask not needed services, no longer needed, mask added to dab 3.7.0
-#	dab exec systemctl mask sys-kernel-config.mount
-#	dab exec systemctl mask systemd-journald-audit.socket
+	# 2) APT/DPKG minimaliseren
+	echo 'APT::Install-Recommends "false";' > ${BASEDIR}/etc/apt/apt.conf.d/00norecommends
+	echo 'Acquire::Languages "none";' > ${BASEDIR}/etc/apt/apt.conf.d/01nolang
+	mkdir -p ${BASEDIR}/etc/dpkg/dpkg.cfg.d
+	echo 'path-exclude=/usr/share/man/*'           >  ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
+	echo 'path-exclude=/usr/share/doc/*'           >> ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
+	echo 'path-include=/usr/share/doc/*/copyright' >> ${BASEDIR}/etc/dpkg/dpkg.cfg.d/01nodoc
 
-#	dab finalize
-	# NOTE: zstd appliances are only supported on PVE >= 7.0, take care on upload!
+	# 3) Journald klein/volatile
+	mkdir -p ${BASEDIR}/etc/systemd/journald.conf.d
+	echo -e "[Journal]\nStorage=volatile\nRuntimeMaxUse=64M" > ${BASEDIR}/etc/systemd/journald.conf.d/10-volatile.conf
+	echo -e "[RateLimit]\nInterval=30s\nBurst=200" > ${BASEDIR}/etc/systemd/journald.conf.d/20-ratelimit.conf
+
+	# 4) Locale & timezone (UTC)
+	echo -e "LANG=C.UTF-8\nLC_ALL=C.UTF-8" > ${BASEDIR}/etc/default/locale
+	echo "UTC" > ${BASEDIR}/etc/timezone
+	dab exec ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
+	dab exec systemctl mask systemd-timesyncd.service systemd-timesyncd.socket
+
+	# 5) Basissoftware
+	dab exec dpkg --purge postfix man-db cron 2>/dev/null || true
+	dab install curl wget logrotate ca-certificates openssh-server unattended-upgrades
+
+	# (optioneel) geen ESM/UA-nags in containers
+	dab exec dpkg --purge ubuntu-advantage-tools 2>/dev/null || true
+
+	# 6) SSH hardening (root key-only)
+	sed -ri 's/^[# ]*PermitRootLogin.*/PermitRootLogin prohibit-password/' ${BASEDIR}/etc/ssh/sshd_config || true
+	grep -q '^PermitRootLogin ' ${BASEDIR}/etc/ssh/sshd_config || echo 'PermitRootLogin prohibit-password' >> ${BASEDIR}/etc/ssh/sshd_config
+	sed -ri 's/^[# ]*PasswordAuthentication.*/PasswordAuthentication no/' ${BASEDIR}/etc/ssh/sshd_config || true
+	sed -ri 's/^[# ]*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' ${BASEDIR}/etc/ssh/sshd_config || true
+	sed -ri 's/^[# ]*UseDNS.*/UseDNS no/' ${BASEDIR}/etc/ssh/sshd_config || true
+
+	# 7) Unattended-upgrades config (Ubuntu noble)
+	cat > ${BASEDIR}/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+EOF
+
+	# Origins: Ubuntu + security pocket
+	cat > ${BASEDIR}/etc/apt/apt.conf.d/50unattended-upgrades <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Ubuntu,codename=${distro_codename},label=Ubuntu";
+        "origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu";
+};
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::OnlyOnACPower "false";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::Verbose "false";
+EOF
+
+	dab exec systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
+
+	# 8) Services tunen
+	dab exec systemctl enable --now logrotate.timer
+	dab exec systemctl mask systemd-networkd-wait-online.service
+	dab exec systemctl disable --now motd-news.service motd-news.timer 2>/dev/null || true
+
+	# 9) Unieke IDs/keys hergenereren bij first boot
+	dab exec rm -f /etc/ssh/ssh_host_*
+	dab exec sh -lc ':> /etc/machine-id; rm -f /var/lib/dbus/machine-id'
+
+	# 10) Cleanup vóór finalize
+	dab exec apt-get -y autoremove --purge
+	dab exec apt-get clean
+	dab exec rm -rf /var/lib/apt/lists/*
+	dab exec rm -rf /usr/share/locale/* /usr/share/doc/* /usr/share/man/* || true
+
+	# 11) Finalize
 	dab finalize --compressor zstd-max
 
 info/init_ok: dab.conf
