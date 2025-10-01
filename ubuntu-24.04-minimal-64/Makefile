@@ -27,12 +27,17 @@ all: info/init_ok
 	dab exec systemctl mask systemd-timesyncd.service systemd-timesyncd.socket
 
 	# 5) Basissoftware (+ purges die in LXC weinig nut hebben)
-	dab exec dpkg --purge postfix man-db cron 2>/dev/null || true
 	dab install curl wget logrotate ca-certificates openssh-server unattended-upgrades
-	dab exec dpkg --purge ubuntu-advantage-tools cloud-init 2>/dev/null || true
 	dab exec systemctl disable --now snapd.seeded.service snapd.socket snapd.service 2>/dev/null || true
-	dab exec dpkg --purge snapd 2>/dev/null || true
-	dab exec dpkg --purge network-manager whoopsie apport python3-apport ubuntu-pro-client ubuntu-pro-client-l10n 2>/dev/null || true
+	dab exec dpkg --purge \
+		postfix man-db cron \
+		ubuntu-advantage-tools cloud-init snapd \
+		network-manager whoopsie apport python3-apport \
+		ubuntu-pro-client ubuntu-pro-client-l10n \
+		rsyslog plymouth ufw iptables-persistent avahi-daemon \
+		popularity-contest landscape-common update-notifier update-manager \
+		friendly-recovery installation-report info doc-debian \
+		2>/dev/null || true
 
 	# 6) SSH hardening (root key-only)
 	sed -ri 's/^[# ]*PermitRootLogin.*/PermitRootLogin prohibit-password/' ${BASEDIR}/etc/ssh/sshd_config || true
