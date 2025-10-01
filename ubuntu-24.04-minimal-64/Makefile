@@ -1,5 +1,4 @@
-
-
+# Build Ubuntu 24.04 (noble) template (requires dab >= 3.7.0)
 BASEDIR:=$(shell dab basedir)
 
 all: info/init_ok
@@ -27,9 +26,14 @@ all: info/init_ok
 	dab exec ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 	dab exec systemctl mask systemd-timesyncd.service systemd-timesyncd.socket
 
-	# 5) Basissoftware (+ purges die in LXC weinig nut hebben)
-	dab install curl wget logrotate ca-certificates openssh-server unattended-upgrades
+	# 5) Basissoftware
+	dab install curl wget logrotate ca-certificates openssh-server
+
+	# 5b) Ultra-minimal purge (veilig voor LXC-servers)
+	# eerst lawaaiige services stoppen/masken waar nodig
 	dab exec systemctl disable --now snapd.seeded.service snapd.socket snapd.service 2>/dev/null || true
+	# geen automatische apt (geen unattended upgrades)
+	dab exec systemctl disable --now apt-daily.service apt-daily.timer apt-daily-upgrade.service apt-daily-upgrade.timer 2>/dev/null || true
 	dab exec dpkg --purge \
 	  postfix man-db cron anacron \
 	  snapd cloud-init ubuntu-advantage-tools ubuntu-pro-client ubuntu-pro-client-l10n \
@@ -50,48 +54,29 @@ all: info/init_ok
 	sed -ri 's/^[# ]*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' ${BASEDIR}/etc/ssh/sshd_config || true
 	sed -ri 's/^[# ]*UseDNS.*/UseDNS no/' ${BASEDIR}/etc/ssh/sshd_config || true
 	sed -ri 's/^[# ]*X11Forwarding.*/X11Forwarding no/' ${BASEDIR}/etc/ssh/sshd_config || true
-	sed -ri 's/^[# ]*MaxAuthTries.*/MaxAuthTries 20/' ${BASEDIR}/etc/ssh/sshd_config || true
+	sed -ri 's/^[# ]*MaxAuthTries.*/MaxAuthTries 3/' ${BASEDIR}/etc/ssh/sshd_config || true
 
-	# 7) Unattended-upgrades (security-only)
-	cat > ${BASEDIR}/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Download-Upgradeable-Packages "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-
-	cat > ${BASEDIR}/etc/apt/apt.conf.d/50unattended-upgrades <<'EOF'
-Unattended-Upgrade::Origins-Pattern {
-        "origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu";
-};
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
-Unattended-Upgrade::Automatic-Reboot "false";
-Unattended-Upgrade::OnlyOnACPower "false";
-Unattended-Upgrade::MinimalSteps "true";
-Unattended-Upgrade::Verbose "false";
-EOF
-	dab exec systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
-
-	# 8) Services tunen
+	# 7) Services tunen
 	dab exec systemctl enable --now logrotate.timer
 	dab exec systemctl mask systemd-networkd-wait-online.service
-	dab exec systemctl disable --now motd-news.service motd-news.timer 2>/dev/null || true
 	# resolved is vaak overbodig in LXC (host levert resolv.conf)
 	dab exec systemctl mask systemd-resolved.service 2>/dev/null || true
 	# e2fs scrub heeft geen nut in LXC
 	dab exec systemctl disable --now e2scrub_all.timer e2scrub_reap.service 2>/dev/null || true
+	# motd-news uit
+	dab exec systemctl disable --now motd-news.service motd-news.timer 2>/dev/null || true
 
-	# 9) Unieke IDs/keys hergenereren bij first boot
+	# 8) Unieke IDs/keys hergenereren bij first boot
 	dab exec rm -f /etc/ssh/ssh_host_*
 	dab exec sh -lc ':> /etc/machine-id; rm -f /var/lib/dbus/machine-id'
 
-	# 10) Cleanup vóór finalize
+	# 9) Cleanup vóór finalize
 	dab exec apt-get -y autoremove --purge
 	dab exec apt-get clean
 	dab exec rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*-old
 	dab exec rm -rf /usr/share/locale/* /usr/share/doc/* /usr/share/man/* || true
 
-	# 11) Finalize
+	# 10) Finalize
 	dab finalize --compressor zstd-max
 
 info/init_ok: dab.conf
