@@ -30,14 +30,17 @@ all: info/init_ok
 	dab install curl wget logrotate ca-certificates openssh-server unattended-upgrades
 	dab exec systemctl disable --now snapd.seeded.service snapd.socket snapd.service 2>/dev/null || true
 	dab exec dpkg --purge \
-		postfix man-db cron \
-		ubuntu-advantage-tools cloud-init snapd \
-		network-manager whoopsie apport python3-apport \
-		ubuntu-pro-client ubuntu-pro-client-l10n \
-		rsyslog plymouth ufw iptables-persistent avahi-daemon \
-		popularity-contest landscape-common update-notifier update-manager \
-		friendly-recovery installation-report info doc-debian \
-		2>/dev/null || true
+	  postfix man-db cron anacron \
+	  snapd cloud-init ubuntu-advantage-tools ubuntu-pro-client ubuntu-pro-client-l10n \
+	  apport python3-apport whoopsie \
+	  network-manager avahi-daemon \
+	  plymouth plymouth-theme* \
+	  update-notifier update-manager landscape-common \
+	  friendly-recovery installation-report info doc-debian \
+	  irqbalance kbd console-setup os-prober grub-common \
+	  mdadm lvm2 multipath-tools \
+	  byobu ubuntu-release-upgrader-core popularity-contest \
+	  2>/dev/null || true
 
 	# 6) SSH hardening (root key-only)
 	sed -ri 's/^[# ]*PermitRootLogin.*/PermitRootLogin prohibit-password/' ${BASEDIR}/etc/ssh/sshd_config || true
